@@ -1,0 +1,58 @@
+name: BlazeNetMonitor independent Windows validation
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/blazenetmonitor-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/blazenetmonitor-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blazenetmonitor-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-app:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install .NET SDK 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run native .NET core regression suite
+        shell: pwsh
+        run: |
+          dotnet run --project tests/BlazeNetMonitor.Tests/BlazeNetMonitor.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Core test runner failed' }
+      - name: Compile standalone Windows x64 preview
+        shell: pwsh
+        run: |
+          dotnet publish src/BlazeNetMonitor/BlazeNetMonitor.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o dist/win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Windows publish failed' }
+      - name: Verify unsigned executable and checksum
+        shell: pwsh
+        run: |
+          $exe = 'dist/win-x64/BlazeNetMonitor.exe'
+          if (!(Test-Path $exe)) { throw 'BlazeNetMonitor.exe missing' }
+          if ((Get-Item $exe).Length -le 0) { throw 'Empty EXE' }
+          (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower() + '  BlazeNetMonitor.exe' | Set-Content -Encoding ascii dist/win-x64/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlazeNetMonitor-x64-source-head-${{ github.run_id }}
+          path: |
+            dist/win-x64/BlazeNetMonitor.exe
+            dist/win-x64/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
